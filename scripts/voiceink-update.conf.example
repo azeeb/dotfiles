@@ -1,0 +1,13 @@
+# VoiceInk Update Checker — configuration
+# Copy this file to ~/.config/voiceink-update.conf and fill in your paths.
+#
+#   cp voiceink-update.conf.example ~/.config/voiceink-update.conf
+
+# Path to your local VoiceInk source repository
+VOICEINK_DIR="/path/to/VoiceInk"
+
+# Path where `make local` outputs the built .app
+VOICEINK_BUILD_OUTPUT="/path/to/VoiceInk.app"
+
+# Path where the app should be installed
+VOICEINK_INSTALL_DIR="/Applications/VoiceInk.app"

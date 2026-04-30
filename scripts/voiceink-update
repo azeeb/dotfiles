@@ -3,7 +3,14 @@
 # VoiceInk Update Checker & Installer
 # Usage: voiceink-update
 
-VOICEINK_DIR="$HOME/Documents/Code/VoiceInk"
+CONFIG_FILE="$HOME/.config/voiceink-update.conf"
+
+# shellcheck source=voiceink-update.conf
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Config file not found. Copy voiceink-update.conf.example to $CONFIG_FILE and set your paths."
+    exit 1
+fi
+source "$CONFIG_FILE"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -22,7 +29,7 @@ echo ""
 # Check that the VoiceInk directory exists
 if [ ! -d "$VOICEINK_DIR" ]; then
     echo -e "${RED}Error: VoiceInk directory not found at $VOICEINK_DIR${RESET}"
-    echo "Please update the VOICEINK_DIR path in this script."
+    echo "Please check VOICEINK_DIR in $CONFIG_FILE."
     exit 1
 fi
 
@@ -76,7 +83,7 @@ case "$ANSWER" in
             # Move updated app to Applications
             echo ""
             echo -e "${YELLOW}Installing updated app to /Applications...${RESET}"
-            cp -R ~/Downloads/VoiceInk.app /Applications/VoiceInk.app
+            cp -R "$VOICEINK_BUILD_OUTPUT" "$VOICEINK_INSTALL_DIR"
             echo -e "${GREEN}✓ VoiceInk has been updated and installed successfully!${RESET}"
         else
             echo -e "${RED}Build failed. Please check the errors above.${RESET}"
