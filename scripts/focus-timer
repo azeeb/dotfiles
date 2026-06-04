@@ -13,7 +13,7 @@
 DEFAULT_MINUTES=15
 BAR_WIDTH=28          # width of the progress bar in characters
 BEEP_SOUND="/System/Library/Sounds/Glass.aiff"
-BEEP_COUNT=3
+BEEP_COUNT=2
 BEEP_DELAY="0.45"
 
 # ── Colours (ANSI) ────────────────────────────────────────────────────────────
@@ -79,6 +79,39 @@ beep_done() {
     done
 }
 
+# Returns 0 to restart, 1 to exit
+ask_restart() {
+    local answer
+    while true; do
+        echo ""
+        echo -e "  ${C_WHITE}Would you like to restart the timer?${RESET}"
+        echo -e "  ${C_GREY}Enter ${RESET}${BOLD}Y${RESET}${C_GREY} or ${RESET}${BOLD}yes${RESET}${C_GREY} to restart, ${RESET}${BOLD}no${RESET}${C_GREY} to exit.${RESET}"
+        printf "  > "
+        read -r answer
+        case "$answer" in
+            [yY]|[yY][eE][sS]) return 0 ;;
+            [nN]|[nN][oO])     return 1 ;;
+            *)
+                echo -e "  ${C_AMBER}Please enter Y, yes, or no.${RESET}"
+                ;;
+        esac
+    done
+}
+
+draw_session_header() {
+    local total_fmt
+    total_fmt=$(format_time "$TOTAL_SECONDS")
+    clear
+    tput civis
+    echo ""
+    echo -e "  ${BOLD}${C_WHITE}⏱  Focus Timer${RESET}  ${C_GREY}—  ${C_CYAN}${total_fmt}${C_GREY} session${RESET}"
+    echo -e "  ${C_GREY}────────────────────────────────────────${RESET}"
+    echo ""
+    echo ""
+    echo ""
+    tput cuu 3
+}
+
 cleanup() {
     # Restore cursor and clear the timer lines on exit
     tput cnorm          # show cursor
@@ -97,84 +130,67 @@ fi
 
 TOTAL_SECONDS=$(echo "$MINUTES * 60" | bc | cut -d. -f1)
 
-# ── Draw the static header (printed once) ────────────────────────────────────
-clear
 trap cleanup INT TERM
 
-tput civis   # hide cursor
+# ── Session loop (restart on Y/yes) ─────────────────────────────────────────
+while true; do
+    draw_session_header
 
-TOTAL_FMT=$(format_time "$TOTAL_SECONDS")
+    REMAINING=$TOTAL_SECONDS
+    PAUSED=false
 
-echo ""
-echo -e "  ${BOLD}${C_WHITE}⏱  Focus Timer${RESET}  ${C_GREY}—  ${C_CYAN}${TOTAL_FMT}${C_GREY} session${RESET}"
-echo -e "  ${C_GREY}────────────────────────────────────────${RESET}"
-echo ""   # line 4 → progress bar   (we'll overwrite from here)
-echo ""   # line 5 → time remaining
-echo ""   # line 6 → status / pause hint
+    while (( REMAINING >= 0 )); do
 
-# Move cursor back up to line 4 so the loop can overwrite
-tput cuu 3
+        # ── Fraction & colour ──────────────────────────────────────────────────
+        PCT=$(( REMAINING * 100 / TOTAL_SECONDS ))
+        COLOR=$(accent_color "$PCT")
+        FILLED=$(( REMAINING * BAR_WIDTH / TOTAL_SECONDS ))
+        TIME_FMT=$(format_time "$REMAINING")
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
-REMAINING=$TOTAL_SECONDS
-PAUSED=false
+        # ── Render (cursor returns to top each iteration) ────────────
+        tput sc
 
-while (( REMAINING >= 0 )); do
+        printf "  "
+        draw_bar "$FILLED" "$BAR_WIDTH" "$COLOR"
+        printf "  ${COLOR}${BOLD}%s${RESET}%-6s\n" "$TIME_FMT" " "
 
-    # ── Fraction & colour ──────────────────────────────────────────────────
-    PCT=$(( REMAINING * 100 / TOTAL_SECONDS ))
-    COLOR=$(accent_color "$PCT")
-    FILLED=$(( REMAINING * BAR_WIDTH / TOTAL_SECONDS ))
-    TIME_FMT=$(format_time "$REMAINING")
+        if $PAUSED; then
+            printf "  ${C_AMBER}${BOLD}⏸  paused${RESET}  ${C_GREY}(press p to resume, q to quit)${RESET}     \n"
+        elif (( REMAINING == 0 )); then
+            printf "  ${C_GREEN}${BOLD}✓  Session complete! Well done.${RESET}            \n"
+        else
+            DONE_PCT=$(( (TOTAL_SECONDS - REMAINING) * 100 / TOTAL_SECONDS ))
+            printf "  ${C_GREY}%d%% done  ·  press ${RESET}${BOLD}p${RESET}${C_GREY} to pause  ·  ${RESET}${BOLD}q${RESET}${C_GREY} to quit${RESET}     \n" "$DONE_PCT"
+        fi
 
-    # ── Render (3 lines, cursor returns to top each iteration) ────────────
-    # Save cursor position
-    tput sc
+        tput rc
 
-    # Line 1 — progress bar
-    printf "  "
-    draw_bar "$FILLED" "$BAR_WIDTH" "$COLOR"
-    printf "  ${COLOR}${BOLD}%s${RESET}%-6s\n" "$TIME_FMT" " "
+        if (( REMAINING == 0 )); then
+            tput cud 2
+            echo ""
+            beep_done
+            tput cnorm
+            break
+        fi
 
-    # Line 2 — label
-    if $PAUSED; then
-        printf "  ${C_AMBER}${BOLD}⏸  paused${RESET}  ${C_GREY}(press p to resume, q to quit)${RESET}     \n"
-    elif (( REMAINING == 0 )); then
-        printf "  ${C_GREEN}${BOLD}✓  Session complete! Well done.${RESET}            \n"
-    else
-        DONE_PCT=$(( (TOTAL_SECONDS - REMAINING) * 100 / TOTAL_SECONDS ))
-        printf "  ${C_GREY}%d%% done  ·  press ${RESET}${BOLD}p${RESET}${C_GREY} to pause  ·  ${RESET}${BOLD}q${RESET}${C_GREY} to quit${RESET}     \n" "$DONE_PCT"
+        if read -r -s -n1 -t1 key 2>/dev/null; then
+            case "$key" in
+                p|P) PAUSED=! $PAUSED ;;
+                q|Q) cleanup ;;
+            esac
+        fi
+
+        $PAUSED && continue
+
+        (( REMAINING-- ))
+    done
+
+    if ask_restart; then
+        continue
     fi
-
-    # Restore cursor to top of our 2-line block
-    tput rc
-
-    # ── Done? ──────────────────────────────────────────────────────────────
-    if (( REMAINING == 0 )); then
-        # Move past our block and print completion
-        tput cud 2
-        echo ""
-        beep_done
-        echo -e "\n  ${C_GREEN}${BOLD}Press any key to exit.${RESET}"
-        tput cnorm
-        read -r -n1
-        exit 0
-    fi
-
-    # ── Non-blocking keypress check (1-second window) ─────────────────────
-    if read -r -s -n1 -t1 key 2>/dev/null; then
-        case "$key" in
-            p|P)
-                PAUSED=! $PAUSED
-                # Redraw paused state immediately
-                ;;
-            q|Q)
-                cleanup
-                ;;
-        esac
-    fi
-
-    $PAUSED && continue
-
-    (( REMAINING-- ))
+    break
 done
+
+tput cnorm
+echo -e "\n${C_GREY}Timer stopped.${RESET}"
+exit 0
