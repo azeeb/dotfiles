@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  focus-timer — Concentration timer for the terminal (macOS)
+#
+#  Usage:
+#    focus-timer          # default 15 minutes
+#    focus-timer 20       # 20 minutes
+#    focus-timer 30       # 30 minutes
+#    focus-timer 60       # 1 hour
+# =============================================================================
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+DEFAULT_MINUTES=15
+BAR_WIDTH=28          # width of the progress bar in characters
+BEEP_SOUND="/System/Library/Sounds/Glass.aiff"
+BEEP_COUNT=3
+BEEP_DELAY="0.45"
+
+# ── Colours (ANSI) ────────────────────────────────────────────────────────────
+RESET="\033[0m"
+BOLD="\033[1m"
+DIM="\033[2m"
+
+C_CYAN="\033[96m"
+C_AMBER="\033[33m"
+C_RED="\033[91m"
+C_GREEN="\033[92m"
+C_WHITE="\033[97m"
+C_GREY="\033[90m"
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Format seconds → MM:SS or H:MM:SS
+format_time() {
+    local total=$1
+    local h=$(( total / 3600 ))
+    local m=$(( (total % 3600) / 60 ))
+    local s=$(( total % 60 ))
+    if (( h > 0 )); then
+        printf "%d:%02d:%02d" "$h" "$m" "$s"
+    else
+        printf "%02d:%02d" "$m" "$s"
+    fi
+}
+
+# Pick colour based on fraction remaining (passed as integer percent 0-100)
+accent_color() {
+    local pct=$1
+    if   (( pct <= 10 )); then echo -e "$C_RED"
+    elif (( pct <= 25 )); then echo -e "$C_AMBER"
+    else                       echo -e "$C_CYAN"
+    fi
+}
+
+# Draw a block progress bar
+# $1 = filled chars, $2 = total chars, $3 = colour
+draw_bar() {
+    local filled=$1 total=$2 color=$3
+    local empty=$(( total - filled ))
+    printf "${color}"
+    # filled portion
+    local i
+    for (( i=0; i<filled; i++ )); do printf "█"; done
+    # empty portion
+    printf "${DIM}${C_GREY}"
+    for (( i=0; i<empty; i++ )); do printf "░"; done
+    printf "${RESET}"
+}
+
+beep_done() {
+    local sound="$BEEP_SOUND"
+    [[ ! -f "$sound" ]] && sound="/System/Library/Sounds/Ping.aiff"
+    for (( i=0; i<BEEP_COUNT; i++ )); do
+        # Play one at a time — overlapping afplay processes fail with AudioQueueStart (-66681)
+        if ! afplay "$sound" 2>/dev/null; then
+            printf '\a'
+        fi
+        (( i < BEEP_COUNT - 1 )) && sleep "$BEEP_DELAY"
+    done
+}
+
+cleanup() {
+    # Restore cursor and clear the timer lines on exit
+    tput cnorm          # show cursor
+    echo -e "\n\n${C_GREY}Timer stopped.${RESET}"
+    exit 0
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+MINUTES="${1:-$DEFAULT_MINUTES}"
+
+if ! [[ "$MINUTES" =~ ^[0-9]+(\.[0-9]+)?$ ]] || (( $(echo "$MINUTES <= 0" | bc -l) )); then
+    echo "Usage: focus-timer [minutes]"
+    echo "  minutes must be a positive number (default: $DEFAULT_MINUTES)"
+    exit 1
+fi
+
+TOTAL_SECONDS=$(echo "$MINUTES * 60" | bc | cut -d. -f1)
+
+# ── Draw the static header (printed once) ────────────────────────────────────
+clear
+trap cleanup INT TERM
+
+tput civis   # hide cursor
+
+TOTAL_FMT=$(format_time "$TOTAL_SECONDS")
+
+echo ""
+echo -e "  ${BOLD}${C_WHITE}⏱  Focus Timer${RESET}  ${C_GREY}—  ${C_CYAN}${TOTAL_FMT}${C_GREY} session${RESET}"
+echo -e "  ${C_GREY}────────────────────────────────────────${RESET}"
+echo ""   # line 4 → progress bar   (we'll overwrite from here)
+echo ""   # line 5 → time remaining
+echo ""   # line 6 → status / pause hint
+
+# Move cursor back up to line 4 so the loop can overwrite
+tput cuu 3
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+REMAINING=$TOTAL_SECONDS
+PAUSED=false
+
+while (( REMAINING >= 0 )); do
+
+    # ── Fraction & colour ──────────────────────────────────────────────────
+    PCT=$(( REMAINING * 100 / TOTAL_SECONDS ))
+    COLOR=$(accent_color "$PCT")
+    FILLED=$(( REMAINING * BAR_WIDTH / TOTAL_SECONDS ))
+    TIME_FMT=$(format_time "$REMAINING")
+
+    # ── Render (3 lines, cursor returns to top each iteration) ────────────
+    # Save cursor position
+    tput sc
+
+    # Line 1 — progress bar
+    printf "  "
+    draw_bar "$FILLED" "$BAR_WIDTH" "$COLOR"
+    printf "  ${COLOR}${BOLD}%s${RESET}%-6s\n" "$TIME_FMT" " "
+
+    # Line 2 — label
+    if $PAUSED; then
+        printf "  ${C_AMBER}${BOLD}⏸  paused${RESET}  ${C_GREY}(press p to resume, q to quit)${RESET}     \n"
+    elif (( REMAINING == 0 )); then
+        printf "  ${C_GREEN}${BOLD}✓  Session complete! Well done.${RESET}            \n"
+    else
+        DONE_PCT=$(( (TOTAL_SECONDS - REMAINING) * 100 / TOTAL_SECONDS ))
+        printf "  ${C_GREY}%d%% done  ·  press ${RESET}${BOLD}p${RESET}${C_GREY} to pause  ·  ${RESET}${BOLD}q${RESET}${C_GREY} to quit${RESET}     \n" "$DONE_PCT"
+    fi
+
+    # Restore cursor to top of our 2-line block
+    tput rc
+
+    # ── Done? ──────────────────────────────────────────────────────────────
+    if (( REMAINING == 0 )); then
+        # Move past our block and print completion
+        tput cud 2
+        echo ""
+        beep_done
+        echo -e "\n  ${C_GREEN}${BOLD}Press any key to exit.${RESET}"
+        tput cnorm
+        read -r -n1
+        exit 0
+    fi
+
+    # ── Non-blocking keypress check (1-second window) ─────────────────────
+    if read -r -s -n1 -t1 key 2>/dev/null; then
+        case "$key" in
+            p|P)
+                PAUSED=! $PAUSED
+                # Redraw paused state immediately
+                ;;
+            q|Q)
+                cleanup
+                ;;
+        esac
+    fi
+
+    $PAUSED && continue
+
+    (( REMAINING-- ))
+done
