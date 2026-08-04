@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Organize files in ~/Downloads into category subfolders by extension."""
+
+import argparse
+import shutil
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+from notifier import send_notification
+
+EXTENSION_MAP = {
+    ".dmg": "Applications",
+    ".pdf": "PDFs",
+    ".xlsx": "Spreadsheets", ".xls": "Spreadsheets", ".csv": "Spreadsheets",
+    ".docx": "Documents", ".doc": "Documents",
+    ".pptx": "Presentations", ".ppt": "Presentations",
+    ".zip": "Archives", ".tar": "Archives", ".gz": "Archives", ".rar": "Archives",
+    ".png": "Images", ".jpg": "Images", ".jpeg": "Images", ".gif": "Images",
+    ".webp": "Images", ".svg": "Images",
+    ".mp4": "Videos", ".mov": "Videos", ".avi": "Videos", ".mkv": "Videos",
+    ".mp3": "Audio", ".wav": "Audio", ".flac": "Audio", ".aac": "Audio",
+}
+DEFAULT_FOLDER = "Others"
+
+
+def get_folder_size_gb(path: Path) -> float:
+    """Recursively sum file sizes under path, in decimal GB (1 GB = 1000^3 bytes)."""
+    total_bytes = 0
+    for entry in path.rglob("*"):
+        if entry.is_file() and not entry.is_symlink():
+            try:
+                total_bytes += entry.stat().st_size
+            except OSError:
+                pass
+    return total_bytes / 1_000_000_000
+
+
+def unique_destination(dest: Path) -> Path:
+    """Avoid clobbering an existing file by appending a numeric suffix."""
+    if not dest.exists():
+        return dest
+    stem, suffix, parent = dest.stem, dest.suffix, dest.parent
+    n = 1
+    while True:
+        candidate = parent / f"{stem} ({n}){suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def organize(downloads_dir: Path, dry_run: bool, notify: bool = True) -> None:
+    if not downloads_dir.is_dir():
+        sys.exit(f"Error: {downloads_dir} is not a directory")
+
+    moved = defaultdict(list)
+    skipped_hidden = []
+
+    for entry in sorted(downloads_dir.iterdir()):
+        if entry.is_dir():
+            continue  # skip subfolders entirely, including the category folders
+        if entry.name.startswith("."):
+            skipped_hidden.append(entry.name)
+            continue
+
+        folder_name = EXTENSION_MAP.get(entry.suffix.lower(), DEFAULT_FOLDER)
+        target_dir = downloads_dir / folder_name
+        dest = unique_destination(target_dir / entry.name)
+
+        if dry_run:
+            moved[folder_name].append(f"{entry.name} -> {folder_name}/{dest.name}")
+        else:
+            target_dir.mkdir(exist_ok=True)
+            shutil.move(str(entry), str(dest))
+            moved[folder_name].append(f"{entry.name} -> {folder_name}/{dest.name}")
+
+    total = sum(len(v) for v in moved.values())
+    print(f"{'[DRY RUN] ' if dry_run else ''}Organized {total} file(s) from {downloads_dir}\n")
+    for folder_name in sorted(moved):
+        print(f"{folder_name}/ ({len(moved[folder_name])})")
+        for line in moved[folder_name]:
+            print(f"  {line}")
+    if skipped_hidden:
+        print(f"\nSkipped {len(skipped_hidden)} hidden file(s): {', '.join(skipped_hidden)}")
+    if total == 0:
+        print("Nothing to organize — no loose files found in the Downloads root.")
+
+    if notify and not dry_run:
+        if total == 0:
+            summary = "Nothing to organize — Downloads root was already clean."
+        else:
+            breakdown = ", ".join(f"{len(v)} to {name}" for name, v in sorted(moved.items()))
+            summary = f"{total} file(s) moved: {breakdown}"
+        size_gb = get_folder_size_gb(downloads_dir)
+        summary += f"\nSize of Downloads folder: {size_gb:.2f} GB"
+        send_notification("Downloads cleanup completed", summary)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dir", type=Path, default=Path.home() / "Downloads",
+        help="Downloads folder to organize (default: ~/Downloads)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would be moved without moving anything",
+    )
+    parser.add_argument(
+        "--no-notify", action="store_true",
+        help="Don't show a macOS notification when done",
+    )
+    args = parser.parse_args()
+    organize(args.dir, args.dry_run, notify=not args.no_notify)
+
+
+if __name__ == "__main__":
+    main()
